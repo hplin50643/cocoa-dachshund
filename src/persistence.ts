@@ -1,4 +1,4 @@
-import { validateSave, type PetSaveV1 } from './core';
+import { validateSave, type PetSaveV2 } from './core';
 
 export const STORAGE_KEY = 'cocoa-dachshund:save:v1';
 const MAX_IMPORT_BYTES = 1024 * 1024;
@@ -11,16 +11,15 @@ function storageOrDefault(storage?: PetStorage): PetStorage {
   if (!result) throw new Error('這個環境無法使用本機儲存。');
   return result;
 }
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '發生無法辨識的錯誤。';
 }
 
-export function serializePet(pet: PetSaveV1): string {
+export function serializePet(pet: PetSaveV2): string {
   return JSON.stringify(validateSave(pet, Date.now(), { allowFutureDates: true }), null, 2);
 }
 
-function parseSaveText(text: string, allowFutureDates: boolean): PetSaveV1 {
+function parseSaveText(text: string, allowFutureDates: boolean): PetSaveV2 {
   if (typeof text !== 'string' || !text.trim()) throw new Error('備份檔是空的，請選擇本遊戲匯出的 JSON 檔案。');
   if (text.length > MAX_IMPORT_BYTES || new TextEncoder().encode(text).byteLength > MAX_IMPORT_BYTES) {
     throw new Error('備份檔超過 1 MiB，請選擇本遊戲匯出的 JSON 檔案。');
@@ -34,11 +33,11 @@ function parseSaveText(text: string, allowFutureDates: boolean): PetSaveV1 {
   return validateSave(parsed, Date.now(), { allowFutureDates });
 }
 
-export function parseImport(text: string): PetSaveV1 {
+export function parseImport(text: string): PetSaveV2 {
   return parseSaveText(text, false);
 }
 
-export function loadSave(storage?: PetStorage): { pet: PetSaveV1 | null; error: string | null; raw: string | null } {
+export function loadSave(storage?: PetStorage): { pet: PetSaveV2 | null; error: string | null; raw: string | null } {
   let raw: string | null = null;
   try {
     raw = storageOrDefault(storage).getItem(STORAGE_KEY);
@@ -50,7 +49,7 @@ export function loadSave(storage?: PetStorage): { pet: PetSaveV1 | null; error: 
   }
 }
 
-export function savePet(pet: PetSaveV1, storage?: PetStorage): { ok: boolean; error: string | null } {
+export function savePet(pet: PetSaveV2, storage?: PetStorage): { ok: boolean; error: string | null } {
   let serialized: string;
   try {
     serialized = serializePet(pet);

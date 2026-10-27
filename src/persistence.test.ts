@@ -112,3 +112,57 @@ describe('backup validation', () => {
     expect(result).not.toHaveProperty('__unexpected');
   });
 });
+
+describe('v1 to v2 compatibility and validation', () => {
+  it('migrates a deployed v1 save without losing care, timestamps or old achievement ids', () => {
+    const now=Date.now();
+    const legacy={schemaVersion:1,id:'existing-pet',name:'麻糬',adoptedAt:now-30*86_400_000,savedAt:now-1000,revision:7,activeMs:3_700_000,
+      needs:{satiety:68,mood:77,hydration:53,energy:82},counts:{feed:10,pet:12,play:1,water:2,sleep:3},
+      achievements:{'feed-first':now-20_000,'feed-10':now-10_000,'pet-10':now-5_000,'active-1h':now-3_000,'adopt-7d':now-2_000},
+      settings:{reducedMotion:true}};
+    const raw=JSON.stringify(legacy);
+    const storage=memoryStorage(raw);
+    const result=loadSave(storage);
+    expect(result.error).toBeNull();
+    expect(result.raw).toBe(raw);
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(result.pet).toMatchObject({schemaVersion:2,id:legacy.id,name:legacy.name,adoptedAt:legacy.adoptedAt,savedAt:legacy.savedAt,revision:7,
+      activeMs:legacy.activeMs,needs:legacy.needs,counts:legacy.counts,achievements:legacy.achievements,
+      settings:{reducedMotion:true,soundEnabled:false},progress:{level:1,xp:0,dailyCompleted:0,weeklyCompleted:0}});
+    expect(result.pet?.missions.daily.every(mission=>mission.count===0)).toBe(true);
+    expect(result.pet?.missions.weekly.every(mission=>mission.count===0)).toBe(true);
+    const upgraded=result.pet!;
+    expect(savePet(upgraded,storage).ok).toBe(true);
+    expect(loadSave(storage).pet).toEqual(upgraded);
+    expect(parseImport(raw)).toEqual(upgraded);
+    expect(parseImport(serializePet(upgraded))).toEqual(upgraded);
+  });
+
+  it('rejects malformed v2 settings, mission progress, and cosmetic ownership without touching the stored save', () => {
+    const pet=createPet('可可');
+    const raw=serializePet(pet);
+    const storage=memoryStorage(raw);
+    const invalidSound={...pet,settings:{...pet.settings,soundEnabled:'yes'}};
+    const invalidItem={...pet,unlocks:{...pet.unlocks,equipped:{...pet.unlocks.equipped,rug:'rug-cream'}}};
+    const invalidMission={...pet,missions:{...pet.missions,daily:pet.missions.daily.map((mission,index)=>index===0?{...mission,count:1,completedAt:null}:mission)}};
+    for(const invalid of [invalidSound,invalidItem,invalidMission]) {
+      expect(()=>parseImport(JSON.stringify(invalid))).toThrow();
+      expect(savePet(invalid as typeof pet,storage).ok).toBe(false);
+    }
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(storage.getItem(STORAGE_KEY)).toBe(raw);
+  });
+
+  it('upgrades early v2 previews missing additive sound and exploration fields', () => {
+    const pet=applyAction(createPet('可可'),'feed',Date.now());
+    const partial=JSON.parse(JSON.stringify(pet)) as Record<string,unknown>;
+    delete (partial.settings as Record<string,unknown>).soundEnabled;
+    delete (partial.progress as Record<string,unknown>).exploredCorners;
+    const loaded=parseImport(JSON.stringify(partial));
+    expect(loaded.settings.soundEnabled).toBe(false);
+    expect(loaded.progress.exploredCorners).toEqual([]);
+    expect(loaded.counts).toEqual(pet.counts);
+    expect(loaded.achievements).toEqual(pet.achievements);
+    expect(parseImport(serializePet(loaded))).toEqual(loaded);
+  });
+});

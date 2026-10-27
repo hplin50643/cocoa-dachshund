@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import type { CareAction } from './core';
+import type { CareAction, CosmeticSelection } from './core';
 
-type SceneOptions = { reducedMotion: boolean; onPetClick: () => void };
+export type ExploreCorner = 'window' | 'plant' | 'bed';
+type SceneOptions = { reducedMotion: boolean; onPetClick: () => void; onExplore?: (corner: ExploreCorner) => void };
 type ActionAnimation = {
   kind: CareAction;
   time: number;
@@ -23,8 +24,6 @@ const earBrown = material('#784123');
 const innerEarBrown = material('#925739');
 const darkBrown = material('#493125');
 const black = new THREE.MeshStandardMaterial({ color: '#211d1a', roughness: 0.2, metalness: 0.05 });
-const mint = material('#90b7a4');
-const gold = new THREE.MeshStandardMaterial({ color: '#d9b56b', roughness: 0.35, metalness: 0.3 });
 
 function ellipsoid(parent: THREE.Object3D, mat: THREE.Material, x: number, y: number, z: number, sx: number, sy: number, sz: number, segments = 32): THREE.Mesh {
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, segments, 20), mat);
@@ -93,9 +92,10 @@ function fabricTexture(): THREE.CanvasTexture {
   canvas.width = canvas.height = 64;
   const ctx = canvas.getContext('2d');
   if (ctx) {
-    ctx.fillStyle = '#d4dfc7';
+    // Neutral weave accepts different rug colours without rebuilding the texture.
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, 64, 64);
-    ctx.strokeStyle = 'rgba(255,255,255,.24)';
+    ctx.strokeStyle = 'rgba(114,106,85,.07)';
     ctx.lineWidth = 1.1;
     for (let n = 2; n < 64; n += 4) {
       ctx.beginPath(); ctx.moveTo(n, 0); ctx.lineTo(n, 64); ctx.stroke();
@@ -126,12 +126,28 @@ export class PetScene {
   private readonly hearts = [createHeart(), createHeart(), createHeart()];
   private readonly sleepy: THREE.Sprite[] = [];
   private readonly ball = new THREE.Group();
+  private readonly toyVariants: Record<string, THREE.Group> = {};
+  private readonly artVariants: Record<string, THREE.Group> = {};
+  private readonly tagVariants: Record<string, THREE.Object3D> = {};
+  private readonly wallMaterial = material('#f2e9dc');
+  private readonly floorMaterial = material('#dfc5a1');
+  private readonly collarMaterial = material('#90b7a4');
+  private readonly tagMaterial = new THREE.MeshStandardMaterial({ color: '#d9b56b', roughness: 0.35, metalness: 0.3 });
+  private readonly rugMaterial = new THREE.MeshStandardMaterial({ color: '#d4dfc7', roughness: 1 });
+  private readonly potMaterial = material('#ece2d1');
+  private readonly bedBaseMaterial = material('#b88871');
+  private readonly bedRimMaterial = material('#c79c83');
+  private readonly bedPadMaterial = material('#ead2b7');
+  private readonly bedPillowMaterial = material('#e6dbc5');
+  private readonly plantLeaves: { mesh: THREE.Mesh; rotation: number }[] = [];
+  private sunlight: THREE.Mesh | null = null;
   private readonly kibble: THREE.Object3D[] = [];
   private readonly tongue: THREE.Mesh;
   private readonly home = new THREE.Vector3(-0.55, 0, 0.75);
   private readonly bedPosition = new THREE.Vector3(-1.95, 0.19, -1.72);
   private readonly ballHome = new THREE.Vector3(-0.3, 0.18, 2.35);
   private readonly raycaster = new THREE.Raycaster();
+  private readonly explorable = new Map<THREE.Object3D, ExploreCorner>();
   private action: ActionAnimation | null = null;
   private wander: { from: THREE.Vector3; to: THREE.Vector3; time: number; duration: number } | null = null;
   private nextWander = 10;
@@ -270,12 +286,29 @@ export class PetScene {
       }
     }
 
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.407, 0.06, 12, 48), mint);
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.407, 0.06, 12, 48), this.collarMaterial);
     collar.position.set(0.91, 1.2, 0); collar.rotation.y = Math.PI / 2; collar.rotation.z = -0.3;
     collar.castShadow = true; this.body.add(collar);
-    const tag = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.035, 24), gold);
+    const tag = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.035, 24), this.tagMaterial);
     tag.position.set(1.015, 0.89, 0.365); tag.rotation.x = Math.PI / 2; this.body.add(tag);
-    ellipsoid(this.body, mint, 1.015, 0.89, 0.389, 0.029, 0.035, 0.008, 12);
+    const dot = ellipsoid(this.body, this.collarMaterial, 1.015, 0.89, 0.389, 0.029, 0.035, 0.008, 12);
+    const goldTag = new THREE.Group(); this.body.add(goldTag); goldTag.add(tag, dot);
+    this.tagVariants['tag-gold'] = goldTag;
+    const heartTag = createHeart();
+    (heartTag.material as THREE.MeshStandardMaterial).color.set('#db9c91');
+    heartTag.position.set(1.015, 0.89, 0.37); heartTag.scale.setScalar(0.38); this.body.add(heartTag);
+    this.tagVariants['tag-heart'] = heartTag;
+    const starShape = new THREE.Shape();
+    for (let i = 0; i < 10; i++) {
+      const angle = Math.PI / 2 + i * Math.PI / 5;
+      const radius = i % 2 === 0 ? 0.14 : 0.065;
+      const x = Math.cos(angle) * radius, y = Math.sin(angle) * radius;
+      if (i === 0) starShape.moveTo(x, y); else starShape.lineTo(x, y);
+    }
+    starShape.closePath();
+    const starTag = new THREE.Mesh(new THREE.ExtrudeGeometry(starShape, { depth: 0.025, bevelEnabled: true, bevelSize: 0.008, bevelThickness: 0.008, bevelSegments: 2 }), this.tagMaterial);
+    starTag.position.set(1.015, 0.89, 0.37); starTag.visible = false; this.body.add(starTag);
+    this.tagVariants['tag-star'] = starTag;
     this.tail.position.set(-1.46, 1.0, 0); this.tail.add(taperedTail()); this.body.add(this.tail);
     const tongue = ellipsoid(this.head, material('#cf8784'), 0.65, -0.39, 0.04, 0.13, 0.12, 0.06);
     tongue.visible = false;
@@ -286,10 +319,9 @@ export class PetScene {
     const room = new THREE.Group();
     this.world.add(room);
     const cream = material('#eee5d5');
-    const wall = material('#f2e9dc');
     const white = material('#fff8eb');
     const wood = material('#c9a67c');
-    const woodLight = material('#dfc5a1');
+    const woodLight = this.floorMaterial;
     rounded(room, cream, 0, -0.21, 0, 9.35, 0.35, 7.35, 0.17);
     rounded(room, woodLight, 0, -0.045, 0, 9.12, 0.12, 7.12, 0.07);
     // Quiet wood seams retain the clean, miniature-room aesthetic.
@@ -300,22 +332,24 @@ export class PetScene {
     for (let i = 0; i < 10; i++) {
       rounded(room, seam, (i % 3 - 1) * 2.9, 0.018, -2.78 + i * 0.64, 0.012, 0.006, 0.63, 0.002);
     }
-    rounded(room, wall, 0, 1.85, -3.58, 9.35, 3.9, 0.16, 0.06);
-    rounded(room, wall, -4.58, 1.85, 0, 0.16, 3.9, 7.3, 0.06);
+    rounded(room, this.wallMaterial, 0, 1.85, -3.58, 9.35, 3.9, 0.16, 0.06);
+    rounded(room, this.wallMaterial, -4.58, 1.85, 0, 0.16, 3.9, 7.3, 0.06);
     rounded(room, white, 0, 0.16, -3.46, 9.15, 0.28, 0.07, 0.025);
     rounded(room, white, -4.46, 0.16, 0, 0.07, 0.28, 7.0, 0.025);
 
     // Soft sage woven rug, with a cream binding and small tassels.
     rounded(room, material('#eeebd9'), -0.15, 0.045, 0.7, 6.5, 0.055, 3.85, 0.026);
-    const rugMat = new THREE.MeshStandardMaterial({ map: fabricTexture(), roughness: 1 });
-    rounded(room, rugMat, -0.15, 0.075, 0.7, 6.37, 0.05, 3.72, 0.024);
+    this.rugMaterial.map = fabricTexture();
+    rounded(room, this.rugMaterial, -0.15, 0.075, 0.7, 6.37, 0.05, 3.72, 0.024);
     for (let z = -0.95; z < 2.45; z += 0.17) {
       for (const x of [-3.45, 3.15]) rounded(room, material('#ede8d2'), x, 0.04, z, 0.17, 0.015, 0.035, 0.006);
     }
 
     // Window and open curtains, entirely geometry rather than downloaded imagery.
-    rounded(room, woodLight, 0.7, 2.52, -3.43, 3.05, 2.05, 0.1, 0.045);
-    rounded(room, material('#d9e6df'), 0.7, 2.52, -3.36, 2.81, 1.81, 0.045, 0.018);
+    const windowFrame = rounded(room, woodLight, 0.7, 2.52, -3.43, 3.05, 2.05, 0.1, 0.045);
+    const windowPane = rounded(room, material('#d9e6df'), 0.7, 2.52, -3.36, 2.81, 1.81, 0.045, 0.018);
+    this.explorable.set(windowFrame, 'window');
+    this.explorable.set(windowPane, 'window');
     const sunDisc = new THREE.Mesh(new THREE.CircleGeometry(0.27, 32), material('#f2d99e'));
     sunDisc.position.set(1.42, 2.96, -3.325); room.add(sunDisc);
     for (const [x, y, s] of [[-0.15, 2.88, 0.23], [0.13, 2.92, 0.32], [0.42, 2.86, 0.2], [1.6, 2.1, 0.24]]) {
@@ -334,20 +368,37 @@ export class PetScene {
     // A small paw-print artwork on the wall.
     rounded(room, wood, -2.85, 2.59, -3.4, 1.12, 1.3, 0.1, 0.07);
     rounded(room, white, -2.85, 2.59, -3.325, 0.94, 1.12, 0.025, 0.012);
+    const pawArt = new THREE.Group(); room.add(pawArt);
+    this.artVariants['art-paw'] = pawArt;
     const pawMat = material('#cc9e80');
-    ellipsoid(room, pawMat, -2.85, 2.49, -3.295, 0.23, 0.2, 0.025);
+    ellipsoid(pawArt, pawMat, -2.85, 2.49, -3.295, 0.23, 0.2, 0.025);
     for (const [x, y, r] of [[-3.12, 2.67, 0.09], [-2.95, 2.84, 0.105], [-2.74, 2.84, 0.105], [-2.57, 2.67, 0.09]]) {
-      ellipsoid(room, pawMat, x, y, -3.295, r, r * 1.15, 0.025);
+      ellipsoid(pawArt, pawMat, x, y, -3.295, r, r * 1.15, 0.025);
     }
+    const flowerArt = new THREE.Group(); flowerArt.visible = false; room.add(flowerArt);
+    this.artVariants['art-flower'] = flowerArt;
+    const flowerPetal = material('#e9b2a2');
+    for (let i = 0; i < 5; i++) {
+      const a = i * Math.PI * 2 / 5;
+      const petal = ellipsoid(flowerArt, flowerPetal, -2.85 + Math.cos(a) * 0.17, 2.66 + Math.sin(a) * 0.17, -3.295, 0.12, 0.16, 0.025, 16);
+      petal.rotation.z = a - Math.PI / 2;
+    }
+    ellipsoid(flowerArt, material('#e4c481'), -2.85, 2.66, -3.265, 0.095, 0.095, 0.028, 16);
+    rounded(flowerArt, material('#97ad88'), -2.85, 2.36, -3.29, 0.035, 0.4, 0.02, 0.008);
+    const flowerLeaf = ellipsoid(flowerArt, material('#a8bc94'), -2.96, 2.37, -3.275, 0.13, 0.055, 0.02, 16); flowerLeaf.rotation.z = -0.55;
+    const heartArt = new THREE.Group(); heartArt.visible = false; room.add(heartArt);
+    this.artVariants['art-heart'] = heartArt;
+    const paintedHeart = createHeart(); paintedHeart.visible = true; paintedHeart.scale.setScalar(0.9); paintedHeart.position.set(-2.85, 2.59, -3.295); heartArt.add(paintedHeart);
 
     // Generously long bed for a generously long dog.
     const bed = new THREE.Group(); bed.position.set(-1.95, 0.06, -1.72); room.add(bed);
-    ellipsoid(bed, material('#b88871'), 0, 0.12, 0, 1.95, 0.18, 0.94);
-    const bolster = new THREE.Mesh(new THREE.TorusGeometry(0.79, 0.19, 16, 56), material('#c79c83'));
+    this.explorable.set(bed, 'bed');
+    ellipsoid(bed, this.bedBaseMaterial, 0, 0.12, 0, 1.95, 0.18, 0.94);
+    const bolster = new THREE.Mesh(new THREE.TorusGeometry(0.79, 0.19, 16, 56), this.bedRimMaterial);
     bolster.rotation.x = Math.PI / 2; bolster.scale.set(2.08, 1, 1); bolster.position.y = 0.29;
     bolster.castShadow = true; bolster.receiveShadow = true; bed.add(bolster);
-    ellipsoid(bed, material('#ead2b7'), 0, 0.21, 0, 1.63, 0.13, 0.67);
-    const pillow = rounded(bed, material('#e6dbc5'), -1.05, 0.36, -0.15, 0.64, 0.2, 0.56, 0.095);
+    ellipsoid(bed, this.bedPadMaterial, 0, 0.21, 0, 1.63, 0.13, 0.67);
+    const pillow = rounded(bed, this.bedPillowMaterial, -1.05, 0.36, -0.15, 0.64, 0.2, 0.56, 0.095);
     pillow.rotation.y = -0.15;
 
     this.buildPlant(room, 3.58, -2.68);
@@ -365,19 +416,34 @@ export class PetScene {
     rounded(room, material('#f1e4c9'), 2.75, 0.11, 0.82, 1.22, 0.035, 2.12, 0.017);
     this.buildBowl(room, 2.73, 1.34, '#d6a08b', false);
     this.buildBowl(room, 2.73, 0.3, '#99b6ac', true);
-    ellipsoid(this.ball, material('#e9b77d', 0.65), 0, 0, 0, 0.18, 0.18, 0.18);
+    const ballToy = new THREE.Group(); this.ball.add(ballToy); this.toyVariants['toy-ball'] = ballToy;
+    ellipsoid(ballToy, material('#e9b77d', 0.65), 0, 0, 0, 0.18, 0.18, 0.18);
     const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.177, 0.014, 8, 32), material('#fbebcf'));
-    stripe.rotation.x = 0.55; stripe.rotation.y = 0.7; this.ball.add(stripe);
+    stripe.rotation.x = 0.55; stripe.rotation.y = 0.7; ballToy.add(stripe);
+    // All toy shapes share the same animated group, so playing always moves the selected one.
+    const squeakyToy = new THREE.Group(); squeakyToy.visible = false; this.ball.add(squeakyToy); this.toyVariants['toy-squeaky'] = squeakyToy;
+    const duckYellow = material('#efc87c');
+    ellipsoid(squeakyToy, duckYellow, 0, 0, 0, 0.25, 0.16, 0.16, 20);
+    ellipsoid(squeakyToy, duckYellow, 0.16, 0.13, 0, 0.14, 0.14, 0.14, 20);
+    ellipsoid(squeakyToy, material('#d68c67'), 0.29, 0.1, 0, 0.09, 0.04, 0.08, 12);
+    ellipsoid(squeakyToy, black, 0.19, 0.16, 0.122, 0.018, 0.02, 0.012, 12);
+    const wing = ellipsoid(squeakyToy, material('#e3ae69'), -0.05, 0.015, 0.14, 0.13, 0.07, 0.025, 16); wing.rotation.z = 0.23;
+    const boneToy = new THREE.Group(); boneToy.visible = false; this.ball.add(boneToy); this.toyVariants['toy-bone'] = boneToy;
+    const boneMat = material('#f7ede1');
+    rounded(boneToy, boneMat, 0, 0, 0, 0.44, 0.11, 0.12, 0.05);
+    for (const x of [-0.22, 0.22]) for (const z of [-0.065, 0.065]) ellipsoid(boneToy, boneMat, x, 0, z, 0.095, 0.085, 0.085, 16);
     this.ball.position.copy(this.ballHome); room.add(this.ball);
 
     // A restrained patch of afternoon light on the floor.
     const lightPatch = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 1.4), new THREE.MeshBasicMaterial({ color: '#fff7d7', transparent: true, opacity: 0.13, depthWrite: false }));
     lightPatch.rotation.x = -Math.PI / 2; lightPatch.rotation.z = -0.28; lightPatch.position.set(1.45, 0.025, -1.28); room.add(lightPatch);
+    this.sunlight = lightPatch;
   }
 
   private buildPlant(room: THREE.Group, x: number, z: number): void {
-    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.3, 0.66, 32), material('#ece2d1'));
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.3, 0.66, 32), this.potMaterial);
     pot.position.set(x, 0.35, z); pot.castShadow = true; pot.receiveShadow = true; room.add(pot);
+    this.explorable.set(pot, 'plant');
     const soil = new THREE.Mesh(new THREE.CylinderGeometry(0.355, 0.355, 0.025, 32), material('#856d51'));
     soil.position.set(x, 0.68, z); room.add(soil);
     const stemMat = material('#8d9670');
@@ -387,6 +453,8 @@ export class PetScene {
       tube(room, [new THREE.Vector3(x, 0.65, z), new THREE.Vector3(x + dx * 0.45, y - 0.35, z + dz * 0.4), new THREE.Vector3(x + dx, y, z + dz)], 0.018, stemMat);
       const leaf = ellipsoid(room, leafMats[i % 3], x + dx, y + 0.12, z + dz, 0.23, 0.43, 0.075);
       leaf.rotation.z = -angle; leaf.rotation.y = i * 0.8;
+      this.plantLeaves.push({ mesh: leaf, rotation: leaf.rotation.z });
+      this.explorable.set(leaf, 'plant');
     });
   }
 
@@ -452,6 +520,42 @@ export class PetScene {
     this.nextWander = this.time + 12;
   }
 
+  /** Apply already-unlocked appearance choices without replacing the renderer or leaking GPU objects. */
+  setCosmetics(selection: CosmeticSelection): void {
+    if (this.disposed) return;
+    const themes: Record<string, readonly [string, string]> = {
+      'theme-cream': ['#f2e9dc', '#dfc5a1'],
+      'theme-sage': ['#dfe8d9', '#d7c4a5'],
+      'theme-peach': ['#f4e1d8', '#e2c1a9'],
+    };
+    const rugs: Record<string, string> = { 'rug-sage': '#d4dfc7', 'rug-cream': '#eee3c8', 'rug-rose': '#eac7c4' };
+    const collars: Record<string, string> = { 'collar-mint': '#90b7a4', 'collar-cream': '#e6d2ac', 'collar-coral': '#d98f7e' };
+    const pots: Record<string, string> = { 'pot-cream': '#ece2d1', 'pot-sage': '#b6c7ad', 'pot-peach': '#e4b6a1' };
+    const beds: Record<string, readonly [string, string, string, string]> = {
+      'bed-peach': ['#b88871', '#c79c83', '#ead2b7', '#e6dbc5'],
+      'bed-cream': ['#c4ad8e', '#dfcfad', '#f2e5cc', '#f7ead9'],
+      'bed-sage': ['#889b80', '#a9b99e', '#d6dfc9', '#f0e9d9'],
+    };
+    const theme = themes[selection.theme] ?? themes['theme-cream'];
+    this.wallMaterial.color.set(theme[0]);
+    this.floorMaterial.color.set(theme[1]);
+    this.rugMaterial.color.set(rugs[selection.rug] ?? rugs['rug-sage']);
+    this.collarMaterial.color.set(collars[selection.collar] ?? collars['collar-mint']);
+    this.potMaterial.color.set(pots[selection.pot] ?? pots['pot-cream']);
+    const bed = beds[selection.bed] ?? beds['bed-peach'];
+    this.bedBaseMaterial.color.set(bed[0]);
+    this.bedRimMaterial.color.set(bed[1]);
+    this.bedPadMaterial.color.set(bed[2]);
+    this.bedPillowMaterial.color.set(bed[3]);
+    const selectVariant = (variants: Record<string, THREE.Object3D>, wanted: string, fallback: string) => {
+      const selected = Object.hasOwn(variants, wanted) ? wanted : fallback;
+      Object.entries(variants).forEach(([id, object]) => { object.visible = id === selected; });
+    };
+    selectVariant(this.toyVariants, selection.toy, 'toy-ball');
+    selectVariant(this.artVariants, selection.art, 'art-paw');
+    selectVariant(this.tagVariants, selection.tag, 'tag-gold');
+  }
+
   resetCamera(): void {
     this.camera.position.set(7.8, 6.7, 10.4);
     this.camera.zoom = 1;
@@ -483,7 +587,19 @@ export class PetScene {
     const bounds = this.renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1);
     this.raycaster.setFromCamera(mouse, this.camera);
-    if (this.raycaster.intersectObject(this.dog, true).length) this.options.onPetClick();
+    // Use one depth-sorted ray for both the dog and objects. A dog in front of
+    // the bed receives the tap, while a visible plant in front of it does not
+    // accidentally count as a petting interaction.
+    const objects = this.options.onExplore ? [this.dog, ...this.explorable.keys()] : [this.dog];
+    const hit = this.raycaster.intersectObjects(objects, true)[0];
+    if (!hit) return;
+    let object: THREE.Object3D | null = hit.object;
+    while (object) {
+      if (object === this.dog) { this.options.onPetClick(); return; }
+      const corner = this.explorable.get(object);
+      if (corner) { this.options.onExplore?.(corner); return; }
+      object = object.parent;
+    }
   };
 
   private onPointerCancel = (): void => { this.pointerStart = null; };
@@ -504,6 +620,10 @@ export class PetScene {
     if (document.hidden || this.contextLost) return;
     this.time += dt;
     this.updateDog(dt);
+    this.plantLeaves.forEach(({ mesh, rotation }, index) => {
+      mesh.rotation.z = rotation + (this.reducedMotion ? 0 : Math.sin(this.time * 0.6 + index) * 0.022);
+    });
+    if (this.sunlight) (this.sunlight.material as THREE.MeshBasicMaterial).opacity = this.reducedMotion ? 0.13 : 0.13 + Math.sin(this.time * 0.35) * 0.018;
     this.controls.update();
     try { this.renderer.render(this.world, this.camera); }
     catch {
