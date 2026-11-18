@@ -2,7 +2,7 @@
 
 一隻棕色短毛臘腸狗，一個奶油色的小家。純前端 3D 養寵物遊戲，繁體中文介面，所有寵物紀錄保存在瀏覽器。
 
-[線上遊玩](https://root50643.github.io/cocoa-dachshund/) · [GitHub 原始碼](https://github.com/root50643/cocoa-dachshund)
+[線上遊玩](https://hplin50643.github.io/cocoa-dachshund/) · [GitHub 原始碼](https://github.com/hplin50643/cocoa-dachshund)
 
 ## 本機啟動
 
